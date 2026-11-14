@@ -188,28 +188,74 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ───────── Carrito persistente (SQLite) ─────────
   const add = async (p: Product) => {
     if (!uid) return;
+
     const db = await getDB();
-    const row = await db.getFirstAsync<{ cantidad: number }>('SELECT cantidad FROM carrito WHERE usuario_id=? AND producto_id=?', [uid, p.id]);
+    const row = await db.getFirstAsync<{ cantidad: number }>(
+      'SELECT cantidad FROM carrito WHERE usuario_id=? AND producto_id=?',
+      [uid, p.id]
+    );
+
+    const actual = products.find((x) => x.id === p.id) ?? p;
+
+    if (actual.stock <= 0) {
+      throw new Error('Producto agotado');
+    }
+
     const next = (row?.cantidad ?? 0) + 1;
-    if (next > p.stock) throw new Error(p.stock > 0 ? `Solo hay ${p.stock} unidades disponibles` : 'Producto agotado');
+
     await db.runAsync(
       `INSERT INTO carrito (usuario_id, producto_id, nombre, precio, cantidad) VALUES (?,?,?,?,?)
-       ON CONFLICT(usuario_id, producto_id) DO UPDATE SET cantidad=excluded.cantidad, nombre=excluded.nombre, precio=excluded.precio`,
+      ON CONFLICT(usuario_id, producto_id) DO UPDATE SET cantidad=excluded.cantidad, nombre=excluded.nombre, precio=excluded.precio`,
       [uid, p.id, p.nombre, p.precio, next]
     );
+
+    setProducts((prev) =>
+      prev.map((x) =>
+        x.id === p.id ? { ...x, stock: x.stock - 1 } : x
+      )
+    );
+
     setCart(await readCart(uid));
   };
 
   const change = async (productoId: number, cantidad: number) => {
     if (!uid) return;
+
     const db = await getDB();
-    if (cantidad <= 0) {
-      await db.runAsync('DELETE FROM carrito WHERE usuario_id=? AND producto_id=?', [uid, productoId]);
-    } else {
-      const item = cart.find((i) => i.producto_id === productoId);
-      if (item && item.stock !== null && cantidad > item.stock) throw new Error(`Solo hay ${item.stock} unidades disponibles`);
-      await db.runAsync('UPDATE carrito SET cantidad=? WHERE usuario_id=? AND producto_id=?', [cantidad, uid, productoId]);
+
+    const row = await db.getFirstAsync<{ cantidad: number }>(
+      'SELECT cantidad FROM carrito WHERE usuario_id=? AND producto_id=?',
+      [uid, productoId]
+    );
+
+    const anterior = row?.cantidad ?? 0;
+    const diferencia = cantidad - anterior;
+    const actual = products.find((x) => x.id === productoId);
+
+    if (diferencia > 0 && actual && diferencia > actual.stock) {
+      throw new Error(`Solo hay ${actual.stock} unidades disponibles`);
     }
+
+    if (cantidad <= 0) {
+      await db.runAsync(
+        'DELETE FROM carrito WHERE usuario_id=? AND producto_id=?',
+        [uid, productoId]
+      );
+    } else {
+      await db.runAsync(
+        'UPDATE carrito SET cantidad=? WHERE usuario_id=? AND producto_id=?',
+        [cantidad, uid, productoId]
+      );
+    }
+
+    setProducts((prev) =>
+      prev.map((x) =>
+        x.id === productoId
+          ? { ...x, stock: x.stock - diferencia }
+          : x
+      )
+    );
+
     setCart(await readCart(uid));
   };
 
